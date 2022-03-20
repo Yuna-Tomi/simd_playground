@@ -1,0 +1,6 @@
+/target
+/img/sobel*
+/img/box*
+/img/*debug*
+/img/*backup*
+/.vscode/**

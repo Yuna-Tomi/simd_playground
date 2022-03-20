@@ -1,0 +1,48 @@
+
+running 43 tests
+test image::tests::eq ... ignored
+test tests::naive2 ... ignored
+test tests::simd_tests::simd1 ... ignored
+test tests::simd_tests::simd2 ... ignored
+test tests::simd_tests::simd3 ... ignored
+test image::tests::load             ... bench:   4,161,435 ns/iter (+/- 822,334)
+test image::tests::save             ... bench:  10,900,424 ns/iter (+/- 315,652)
+test tests::box11_naive2            ... bench:  37,690,408 ns/iter (+/- 1,194,744)
+test tests::box13_naive2            ... bench:  55,087,729 ns/iter (+/- 1,685,914)
+test tests::box15_naive2            ... bench:  71,844,558 ns/iter (+/- 1,758,148)
+test tests::box17_naive2            ... bench:  90,990,712 ns/iter (+/- 1,761,585)
+test tests::box19_naive2            ... bench: 111,672,566 ns/iter (+/- 2,150,814)
+test tests::box3_naive2             ... bench:   3,379,324 ns/iter (+/- 120,431)
+test tests::box5_naive2             ... bench:   7,632,189 ns/iter (+/- 198,934)
+test tests::box7_naive2             ... bench:  15,038,483 ns/iter (+/- 1,983,729)
+test tests::box9_naive2             ... bench:  24,949,241 ns/iter (+/- 484,927)
+test tests::simd_tests::box11_simd1 ... bench:  39,257,812 ns/iter (+/- 832,379)
+test tests::simd_tests::box11_simd2 ... bench:  64,945,516 ns/iter (+/- 1,720,297)
+test tests::simd_tests::box11_simd3 ... bench:  44,041,733 ns/iter (+/- 1,560,168)
+test tests::simd_tests::box13_simd1 ... bench:  53,970,320 ns/iter (+/- 1,423,075)
+test tests::simd_tests::box13_simd2 ... bench:  83,737,704 ns/iter (+/- 9,256,783)
+test tests::simd_tests::box13_simd3 ... bench:  60,006,950 ns/iter (+/- 1,368,304)
+test tests::simd_tests::box15_simd1 ... bench:  70,876,204 ns/iter (+/- 1,424,752)
+test tests::simd_tests::box15_simd2 ... bench: 121,684,441 ns/iter (+/- 22,810,929)
+test tests::simd_tests::box15_simd3 ... bench:  84,234,174 ns/iter (+/- 952,482)
+test tests::simd_tests::box17_simd1 ... bench:  89,957,100 ns/iter (+/- 2,310,332)
+test tests::simd_tests::box17_simd2 ... bench: 144,438,920 ns/iter (+/- 3,201,983)
+test tests::simd_tests::box17_simd3 ... bench:  96,164,962 ns/iter (+/- 330,876)
+test tests::simd_tests::box19_simd1 ... bench: 110,564,095 ns/iter (+/- 1,801,514)
+test tests::simd_tests::box19_simd2 ... bench: 190,985,199 ns/iter (+/- 1,402,457)
+test tests::simd_tests::box19_simd3 ... bench: 128,802,533 ns/iter (+/- 607,523)
+test tests::simd_tests::box3_simd1  ... bench:   3,837,779 ns/iter (+/- 65,318)
+test tests::simd_tests::box3_simd2  ... bench:   2,738,708 ns/iter (+/- 27,907)
+test tests::simd_tests::box3_simd3  ... bench:   1,328,187 ns/iter (+/- 25,721)
+test tests::simd_tests::box5_simd1  ... bench:   9,037,354 ns/iter (+/- 89,427)
+test tests::simd_tests::box5_simd2  ... bench:   5,181,216 ns/iter (+/- 31,280)
+test tests::simd_tests::box5_simd3  ... bench:   9,004,966 ns/iter (+/- 44,357)
+test tests::simd_tests::box7_simd1  ... bench:  16,760,970 ns/iter (+/- 153,211)
+test tests::simd_tests::box7_simd2  ... bench:   8,588,137 ns/iter (+/- 81,894)
+test tests::simd_tests::box7_simd3  ... bench:  18,595,766 ns/iter (+/- 159,786)
+test tests::simd_tests::box9_simd1  ... bench:  26,880,241 ns/iter (+/- 252,958)
+test tests::simd_tests::box9_simd2  ... bench:  13,084,345 ns/iter (+/- 120,805)
+test tests::simd_tests::box9_simd3  ... bench:  27,399,316 ns/iter (+/- 190,190)
+
+test result: ok. 0 passed; 0 failed; 5 ignored; 38 measured; 0 filtered out; finished in 605.97s
+
