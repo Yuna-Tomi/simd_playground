@@ -59,7 +59,7 @@ ax.set_ylim(-10000, y_upper)
 ax.set_yticks(range(0, y_upper, 40000))
 
 ax.set_xlabel("Kernel Size", size=30)
-ax.set_ylabel("Average Execution Time (ms)", size=30)
+ax.set_ylabel("Average Execution Time (us)", size=30)
 
 ax.plot(X, naive2, label=NAIVE2)
 ax.plot(X, simd1, label=SIMD1)

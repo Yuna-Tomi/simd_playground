@@ -15,7 +15,7 @@ $ cargo +nightly-2022-03-01 bench --bench main # You need nightly to benchmarkin
 `ConvProcessor<K>::simd3` has bug and it does not work well for K >= 9 (K is kernel size) now.
 
 ## Benchmark
-Results for different implementations.
+Results for convolution on 512x512 image(`img/Lenna.png`).
 Executed on:
 ```
 OS:
