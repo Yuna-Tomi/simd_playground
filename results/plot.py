@@ -54,7 +54,10 @@ plt_setup()
 fig = plt.figure(figsize=(12, 12))
 ax = fig.add_subplot(111)
 ax.set_xlim(2, 20)
-ax.set_ylim(0, y_upper)
+ax.set_xticks(range(3, 20, 2))
+ax.set_ylim(-10000, y_upper)
+ax.set_yticks(range(0, y_upper, 40000))
+
 ax.set_xlabel("Kernel Size", size=30)
 ax.set_ylabel("Average Execution Time (ms)", size=30)
 
@@ -64,4 +67,5 @@ ax.plot(X, simd2, label=SIMD2)
 ax.plot(X, simd3, label=SIMD3)
 ax.legend()
 
+plt.tight_layout()
 fig.savefig("bench.jpeg")
