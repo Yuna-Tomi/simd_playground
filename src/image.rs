@@ -1,6 +1,8 @@
-use std::fs::OpenOptions;
-use std::io::{self, BufWriter};
-use std::path::Path;
+use std::{
+    fs::OpenOptions,
+    io::{self, BufWriter},
+    path::Path,
+};
 
 use png::{BitDepth, ColorType, Decoder, Encoder};
 
@@ -93,8 +95,6 @@ impl PartialEq for RgbImage {
 
 #[cfg(test)]
 mod tests {
-    use test::Bencher;
-
     use super::*;
     use crate::consts::*;
 
@@ -107,23 +107,6 @@ mod tests {
             width: img.width,
         };
         assert_ne!(img, dummy);
-        Ok(())
-    }
-
-    #[bench]
-    fn load(b: &mut Bencher) -> io::Result<()> {
-        b.iter(|| {
-            RgbImage::load(ORIGINAL).expect("cannot load");
-        });
-        Ok(())
-    }
-
-    #[bench]
-    fn save(b: &mut Bencher) -> io::Result<()> {
-        let img = RgbImage::load(ORIGINAL)?;
-        b.iter(|| {
-            img.save(BACKUP).expect("cannot save");
-        });
         Ok(())
     }
 }

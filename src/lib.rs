@@ -1,6 +1,7 @@
 #![feature(stdsimd)]
 #![feature(test)]
-#![feature(generic_const_exprs)]
+#![allow(incomplete_features)]
+#![feature(generic_const_exprs)] // incomplete feature
 #![feature(unboxed_closures)]
 extern crate test;
 
@@ -10,8 +11,13 @@ use std::mem;
 
 use crate::image::RgbImage;
 
-mod consts;
-mod image;
+pub mod consts;
+pub mod image;
+mod util;
+
+pub mod test_util {
+    pub use crate::util::test_util::*;
+}
 
 #[derive(Debug)]
 struct ConvKernel<const K: usize> {
@@ -38,7 +44,7 @@ impl<const K: usize> ConvKernel<K> {
         };
 
         Self {
-            inner: filter.iter().map(|c| *c).collect(),
+            inner: filter.to_vec(),
             div,
         }
     }
@@ -49,7 +55,7 @@ impl<const K: usize> ConvKernel<K> {
 }
 
 #[derive(Debug)]
-struct ConvProcessor<const K: usize> {
+pub struct ConvProcessor<const K: usize> {
     kernel: ConvKernel<K>,
 }
 
@@ -104,9 +110,9 @@ impl<const K: usize> ConvProcessor<K> {
                 let mut rgb: [f32; 3] = [0.; C];
                 for i in 0..K {
                     for j in 0..K {
-                        for c in 0..C {
+                        for (c, pix) in rgb.iter_mut().enumerate() {
                             let index = (y - half + i) * w * C + (x - half + j) * C + c;
-                            rgb[c] += src.content()[index] as f32 * self.kernel.at(i, j);
+                            *pix += src.content()[index] as f32 * self.kernel.at(i, j);
                         }
                     }
                 }
@@ -123,6 +129,7 @@ impl<const K: usize> ConvProcessor<K> {
         RgbImage::from_raw(dst, h, w)
     }
 
+    #[cfg(all(any(target_arch = "aarch64"), target_feature = "neon"))]
     pub fn simd1(&self, src: &RgbImage) -> RgbImage {
         let h = src.height;
         let w = src.width;
@@ -137,7 +144,7 @@ impl<const K: usize> ConvProcessor<K> {
         let simd_end = w - half - (w - 2 * half) % 4;
 
         let simd_loop = |x: usize, y: usize, dst: &mut [u8]| {
-            let mut vt = unsafe { init_float32x4x3(0.) };
+            let mut vt = unsafe { crate::util::init_float32x4x3(0.) };
             for i in 0..K {
                 for j in 0..K {
                     let kern = unsafe { vdupq_n_f32(self.kernel.at(i, j)) };
@@ -177,26 +184,6 @@ impl<const K: usize> ConvProcessor<K> {
             }
         };
 
-        let peel_loop = |x: usize, y: usize, dst: &mut [u8]| {
-            let mut rgb: [f32; 3] = [0.; C];
-            for i in 0..K {
-                for j in 0..K {
-                    for c in 0..C {
-                        let index = (y - half + i) * w * C + (x - half + j) * C + c;
-                        rgb[c] += src.content()[index] as f32 * self.kernel.at(i, j);
-                    }
-                }
-            }
-            let base_index = y * w * C + x * C;
-            for c in 0..C {
-                let mut t = rgb[c];
-                if let Some(div) = self.kernel.div {
-                    t /= div;
-                }
-                dst[base_index + c] = t.clamp(u8::MIN as f32, u8::MAX as f32) as u8;
-            }
-        };
-
         // main execution
         for y in half..yend {
             for x in (half..simd_end).step_by(4) {
@@ -204,10 +191,32 @@ impl<const K: usize> ConvProcessor<K> {
             }
 
             for x in simd_end..xend {
-                peel_loop(x, y, &mut dst);
+                self.peel_loop(x, y, src, &mut dst);
             }
         }
         RgbImage::from_raw(dst, h, w)
+    }
+
+    fn peel_loop(&self, x: usize, y: usize, src: &RgbImage, dst: &mut [u8]) {
+        let w = src.width;
+        let half = K / 2;
+        let mut rgb: [f32; 3] = [0.; C];
+        for i in 0..K {
+            for j in 0..K {
+                for (c, pix) in rgb.iter_mut().enumerate() {
+                    let index = (y - half + i) * w * C + (x - half + j) * C + c;
+                    *pix += src.content()[index] as f32 * self.kernel.at(i, j);
+                }
+            }
+        }
+        let base_index = y * w * C + x * C;
+        for c in 0..C {
+            let mut t = rgb[c];
+            if let Some(div) = self.kernel.div {
+                t /= div;
+            }
+            dst[base_index + c] = t.clamp(u8::MIN as f32, u8::MAX as f32) as u8;
+        }
     }
 }
 
@@ -230,7 +239,7 @@ where
         let simd_end = w - half - (w - 2 * half) % 4;
 
         let simd_loop = |x: usize, y: usize, dst: &mut [u8]| {
-            let mut vt = unsafe { init_float32x4x3(0.) };
+            let mut vt = unsafe { crate::util::init_float32x4x3(0.) };
             for i in 0..K {
                 // We process 2*half+4 elements(x3, RGB channel) in a row here
                 // then number of simd registers simd register is ceil(half/2 + 1).
@@ -239,12 +248,13 @@ where
                 let base_index = (y - half + i) * w * C + (x - half) * C;
                 let mut s4 = [0.; 4];
 
-                let mut load = |k: usize, c: usize, four_or_two: usize| -> float32x4_t {
-                    debug_assert!(four_or_two == 2 || four_or_two == 4);
+                let mut load = |k: usize, c: usize, ft: usize| -> float32x4_t {
+                    // ft := four or two
+                    debug_assert!(ft == 2 || ft == 4);
                     let base_index = base_index + k * 4 * C;
-                    for z in 0..four_or_two {
+                    for (z, s) in s4.iter_mut().enumerate().take(ft) {
                         // +z in second axis and +c in third axis
-                        s4[z] = src.content()[base_index + z * C + c] as f32;
+                        *s = src.content()[base_index + z * C + c] as f32;
                     }
                     unsafe { vld1q_f32(s4.as_ptr()) }
                 };
@@ -311,26 +321,6 @@ where
             }
         };
 
-        let peel_loop = |x: usize, y: usize, dst: &mut [u8]| {
-            let mut rgb: [f32; 3] = [0.; C];
-            for i in 0..K {
-                for j in 0..K {
-                    for c in 0..C {
-                        let index = (y - half + i) * w * C + (x - half + j) * C + c;
-                        rgb[c] += src.content()[index] as f32 * self.kernel.at(i, j);
-                    }
-                }
-            }
-            let base_index = y * w * C + x * C;
-            for c in 0..C {
-                let mut t = rgb[c];
-                if let Some(div) = self.kernel.div {
-                    t /= div;
-                }
-                dst[base_index + c] = t.clamp(u8::MIN as f32, u8::MAX as f32) as u8;
-            }
-        };
-
         // main execution
         for y in half..yend {
             for x in (half..simd_end).step_by(4) {
@@ -338,11 +328,26 @@ where
             }
 
             for x in simd_end..xend {
-                peel_loop(x, y, &mut dst);
+                self.peel_loop(x, y, src, &mut dst);
             }
         }
         RgbImage::from_raw(dst, h, w)
     }
+}
+
+// Helper macro to pack float32x4_t into uint8x16_t
+// Ugly hack: $c should be tuple indice.
+// $v is expected to be
+#[rustfmt::skip]
+macro_rules! vec4_cvt {
+    ($v:ident, $c:tt) => {{
+        vqmovn_high_u16(
+            vqmovn_u16(vqmovn_high_u32(vqmovn_u32(vcvtq_u32_f32($v[0].$c)),
+                                                  vcvtq_u32_f32($v[1].$c))),
+                       vqmovn_high_u32(vqmovn_u32(vcvtq_u32_f32($v[2].$c)),
+                                                  vcvtq_u32_f32($v[3].$c)),
+        )
+    }};
 }
 
 #[cfg(all(any(target_arch = "aarch64"), target_feature = "neon"))]
@@ -363,7 +368,7 @@ where
         let simd_end = w - half - (w - 2 * half) % 16;
 
         let simd_loop = |x: usize, y: usize, dst: &mut [u8]| {
-            let mut vts = unsafe { init_multiple_float32x4x3::<4>(0.) };
+            let mut vts = unsafe { crate::util::init_multiple_float32x4x3::<4>(0.) };
             for i in 0..K {
                 let mut shared = unsafe { [mem::zeroed::<float32x4x3_t>(); (K + 1) / 4 + 4] };
                 let base_index = (y - half + i) * w * C + (x - half) * C;
@@ -411,13 +416,13 @@ where
                     }
                 };
 
-                let load4or2 = |shared: &mut [float32x4x3_t], b: usize, four_or_two: usize| {
-                    debug_assert!(four_or_two == 2 || four_or_two == 4);
+                let load4or2 = |shared: &mut [float32x4x3_t], b: usize, ft: usize| {
+                    debug_assert!(ft == 2 || ft == 4);
                     let base_index = base_index + b * 4 * C;
                     let mut s4 = [0.; 4];
                     let mut load = |c: usize| -> float32x4_t {
-                        for z in 0..four_or_two {
-                            s4[z] = src.content()[base_index + z * C + c] as f32;
+                        for (z, s) in s4.iter_mut().enumerate().take(ft) {
+                            *s = src.content()[base_index + z * C + c] as f32;
                         }
                         unsafe { vld1q_f32(s4.as_ptr()) }
                     };
@@ -486,7 +491,7 @@ where
 
                 for j in 0..K {
                     let kern = unsafe { vdupq_n_f32(self.kernel.at(i, j)) };
-                    for z in 0..4 {
+                    for (z, vt) in vts.iter_mut().enumerate().take(4) {
                         let s = z * 4 + j;
                         let regi = s / 4;
                         let offset = s % 4;
@@ -512,9 +517,9 @@ where
                         };
 
                         unsafe {
-                            vts[z].0 = vfmaq_f32(vts[z].0, vs.0, kern);
-                            vts[z].1 = vfmaq_f32(vts[z].1, vs.1, kern);
-                            vts[z].2 = vfmaq_f32(vts[z].2, vs.2, kern);
+                            vt.0 = vfmaq_f32(vt.0, vs.0, kern);
+                            vt.1 = vfmaq_f32(vt.1, vs.1, kern);
+                            vt.2 = vfmaq_f32(vt.2, vs.2, kern);
                         }
 
                         /* see comments on commented out implementations above */
@@ -526,14 +531,13 @@ where
                     }
                 }
             }
-
             if let Some(div) = self.kernel.div {
                 let vdiv = unsafe { vdupq_n_f32(div) };
-                for z in 0..4 {
+                for vt in &mut vts {
                     unsafe {
-                        vts[z].0 = vdivq_f32(vts[z].0, vdiv);
-                        vts[z].1 = vdivq_f32(vts[z].1, vdiv);
-                        vts[z].2 = vdivq_f32(vts[z].2, vdiv);
+                        vt.0 = vdivq_f32(vt.0, vdiv);
+                        vt.1 = vdivq_f32(vt.1, vdiv);
+                        vt.2 = vdivq_f32(vt.2, vdiv);
                     }
                 }
             }
@@ -546,26 +550,6 @@ where
             }
         };
 
-        let peel_loop = |x: usize, y: usize, dst: &mut [u8]| {
-            let mut rgb: [f32; 3] = [0.; C];
-            for i in 0..K {
-                for j in 0..K {
-                    for c in 0..C {
-                        let index = (y - half + i) * w * C + (x - half + j) * C + c;
-                        rgb[c] += src.content()[index] as f32 * self.kernel.at(i, j);
-                    }
-                }
-            }
-            let base_index = y * w * C + x * C;
-            for c in 0..C {
-                let mut t = rgb[c];
-                if let Some(div) = self.kernel.div {
-                    t /= div;
-                }
-                dst[base_index + c] = t.clamp(u8::MIN as f32, u8::MAX as f32) as u8;
-            }
-        };
-
         // main execution
         for y in half..yend {
             for x in (half..simd_end).step_by(16) {
@@ -573,115 +557,20 @@ where
             }
 
             for x in simd_end..xend {
-                peel_loop(x, y, &mut dst);
+                self.peel_loop(x, y, src, &mut dst);
             }
         }
         RgbImage::from_raw(dst, h, w)
     }
 }
 
-// Helper macro to pack float32x4_t into uint8x16_t
-// Ugly hack: $c should be tuple indice.
-// $v is expected to be
-#[rustfmt::skip]
-#[macro_export]
-macro_rules! vec4_cvt {
-    ($v:ident, $c:tt) => {{
-        vqmovn_high_u16(
-            vqmovn_u16(vqmovn_high_u32(vqmovn_u32(vcvtq_u32_f32($v[0].$c)),
-                                                  vcvtq_u32_f32($v[1].$c))),
-                       vqmovn_high_u32(vqmovn_u32(vcvtq_u32_f32($v[2].$c)),
-                                                  vcvtq_u32_f32($v[3].$c)),
-        )
-    }};
-}
-
-#[inline]
-pub unsafe fn init_multiple_float32x4x3<const N: usize>(value: f32) -> [float32x4x3_t; N] {
-    let mut init = [mem::zeroed::<float32x4x3_t>(); N];
-    for i in 0..N {
-        init[i] = float32x4x3_t(vdupq_n_f32(value), vdupq_n_f32(value), vdupq_n_f32(value));
-    }
-    init
-}
-
-#[inline]
-pub unsafe fn init_float32x4x3(value: f32) -> float32x4x3_t {
-    float32x4x3_t(vdupq_n_f32(value), vdupq_n_f32(value), vdupq_n_f32(value))
-}
-
 #[cfg(test)]
-mod tests {
+pub mod tests {
 
     use std::io;
 
-    use test::Bencher;
-
     use super::*;
-    use crate::consts::*;
-
-    #[derive(Debug, Clone, Copy)]
-    enum FilterType {
-        Box(usize),
-        Sobel,
-    }
-
-    impl FilterType {
-        fn answer_path(&self) -> String {
-            match self {
-                FilterType::Box(k) => format!("img/box_ans_{}x{}.png", k, k),
-                FilterType::Sobel => SOBEL_ANS.to_string(),
-            }
-        }
-
-        fn filter(&self) -> Vec<f32> {
-            match self {
-                &FilterType::Box(k) => vec![1.; k * k],
-                FilterType::Sobel => SOBEL_FILTER.to_vec(),
-            }
-        }
-
-        const fn avg(&self) -> bool {
-            match self {
-                FilterType::Box(_) => true,
-                FilterType::Sobel => false,
-            }
-        }
-
-        const fn size(&self) -> usize {
-            match self {
-                &FilterType::Box(k) => k,
-                FilterType::Sobel => 3,
-            }
-        }
-    }
-
-    // confirm answer image is valid before test
-    fn make<const K: usize>(ty: FilterType) -> io::Result<(RgbImage, ConvProcessor<K>)> {
-        let img = RgbImage::load(ORIGINAL)?;
-        let layer = ConvProcessor::<K>::new(&ty.filter(), ty.avg());
-        layer.naive1(&img).save(ty.answer_path())?;
-        Ok((img, layer))
-    }
-
-    fn test<const K: usize, F>(b: Option<&mut Bencher>, ty: FilterType, f: F) -> io::Result<()>
-    where
-        F: Fn(&ConvProcessor<K>, &RgbImage) -> RgbImage,
-    {
-        let (img, layer) = make::<K>(ty)?;
-        let processed = &mut RgbImage::empty(); // initialize with dummy
-        *processed = f(&layer, &img);
-
-        if *processed != RgbImage::load(ty.answer_path())? {
-            processed.save(DEBUG)?;
-            panic!("invalid calculation in {:?}", ty);
-        }
-
-        if let Some(b) = b {
-            b.iter(|| *processed = f(&layer, &img));
-        }
-        Ok(())
-    }
+    use crate::util::test_util::{test, FilterType};
 
     // check filters for ConvProcessor::$method
     // use macro here due to test multiple constant generic parameter
@@ -690,20 +579,13 @@ mod tests {
             for &ty in [ $(FilterType::Box($k),)* FilterType::Sobel,].iter() {
                 match ty.size() {
                     $(
-                        $k => test(None, ty, ConvProcessor::<$k>::$method)?,
+                        // run test with assertion enabled
+                        $k => test(None, true, ty, ConvProcessor::<$k>::$method)?,
                     )*
                     _ => unreachable!(),
                 }
             }
             Ok(())
-        }};
-    }
-
-    macro_rules! bench {
-        ($bencher:ident, $const_filter_type:expr, $method:ident) => {{
-            const FIL_TY: FilterType = $const_filter_type;
-            const K: usize = FIL_TY.size();
-            test(Some($bencher), FIL_TY, ConvProcessor::<K>::$method)
         }};
     }
 
@@ -718,56 +600,11 @@ mod tests {
     }
 
     // you can specify which size of kernels are tested by adding odd numbers inside check!()
-    config!(check_all, 3, 5, 7, 9, 11, 13, 15, 17, 19,);
+    config!(check_all, 3, 5, 7, 9, 11, 13, 15, 17, 19);
 
     #[test]
     fn naive2() -> io::Result<()> {
         check_all!(naive2)
-    }
-
-    #[bench]
-    fn box3_naive2(b: &mut Bencher) -> io::Result<()> {
-        bench!(b, FilterType::Box(3), naive2)
-    }
-
-    #[bench]
-    fn box5_naive2(b: &mut Bencher) -> io::Result<()> {
-        bench!(b, FilterType::Box(5), naive2)
-    }
-
-    #[bench]
-    fn box7_naive2(b: &mut Bencher) -> io::Result<()> {
-        bench!(b, FilterType::Box(7), naive2)
-    }
-
-    #[bench]
-    fn box9_naive2(b: &mut Bencher) -> io::Result<()> {
-        bench!(b, FilterType::Box(9), naive2)
-    }
-
-    #[bench]
-    fn box11_naive2(b: &mut Bencher) -> io::Result<()> {
-        bench!(b, FilterType::Box(11), naive2)
-    }
-
-    #[bench]
-    fn box13_naive2(b: &mut Bencher) -> io::Result<()> {
-        bench!(b, FilterType::Box(13), naive2)
-    }
-
-    #[bench]
-    fn box15_naive2(b: &mut Bencher) -> io::Result<()> {
-        bench!(b, FilterType::Box(15), naive2)
-    }
-
-    #[bench]
-    fn box17_naive2(b: &mut Bencher) -> io::Result<()> {
-        bench!(b, FilterType::Box(17), naive2)
-    }
-
-    #[bench]
-    fn box19_naive2(b: &mut Bencher) -> io::Result<()> {
-        bench!(b, FilterType::Box(19), naive2)
     }
 
     #[cfg(all(any(target_arch = "aarch64"), all(target_feature = "neon")))]
@@ -779,149 +616,14 @@ mod tests {
             check_all!(simd1)
         }
 
-        #[bench]
-        fn box3_simd1(b: &mut Bencher) -> io::Result<()> {
-            bench!(b, FilterType::Box(3), simd1)
-        }
-
-        #[bench]
-        fn box5_simd1(b: &mut Bencher) -> io::Result<()> {
-            bench!(b, FilterType::Box(5), simd1)
-        }
-
-        #[bench]
-        fn box7_simd1(b: &mut Bencher) -> io::Result<()> {
-            bench!(b, FilterType::Box(7), simd1)
-        }
-
-        #[bench]
-        fn box9_simd1(b: &mut Bencher) -> io::Result<()> {
-            bench!(b, FilterType::Box(9), simd1)
-        }
-
-        #[bench]
-        fn box11_simd1(b: &mut Bencher) -> io::Result<()> {
-            bench!(b, FilterType::Box(11), simd1)
-        }
-
-        #[bench]
-        fn box13_simd1(b: &mut Bencher) -> io::Result<()> {
-            bench!(b, FilterType::Box(13), simd1)
-        }
-
-        #[bench]
-        fn box15_simd1(b: &mut Bencher) -> io::Result<()> {
-            bench!(b, FilterType::Box(15), simd1)
-        }
-
-        #[bench]
-        fn box17_simd1(b: &mut Bencher) -> io::Result<()> {
-            bench!(b, FilterType::Box(17), simd1)
-        }
-
-        #[bench]
-        fn box19_simd1(b: &mut Bencher) -> io::Result<()> {
-            bench!(b, FilterType::Box(19), simd1)
-        }
-
         #[test]
         fn simd2() -> io::Result<()> {
             check_all!(simd2)
         }
 
-        #[bench]
-        fn box3_simd2(b: &mut Bencher) -> io::Result<()> {
-            bench!(b, FilterType::Box(3), simd2)
-        }
-
-        #[bench]
-        fn box5_simd2(b: &mut Bencher) -> io::Result<()> {
-            bench!(b, FilterType::Box(5), simd2)
-        }
-
-        #[bench]
-        fn box7_simd2(b: &mut Bencher) -> io::Result<()> {
-            bench!(b, FilterType::Box(7), simd2)
-        }
-
-        #[bench]
-        fn box9_simd2(b: &mut Bencher) -> io::Result<()> {
-            bench!(b, FilterType::Box(9), simd2)
-        }
-
-        #[bench]
-        fn box11_simd2(b: &mut Bencher) -> io::Result<()> {
-            bench!(b, FilterType::Box(11), simd2)
-        }
-
-        #[bench]
-        fn box13_simd2(b: &mut Bencher) -> io::Result<()> {
-            bench!(b, FilterType::Box(13), simd2)
-        }
-
-        #[bench]
-        fn box15_simd2(b: &mut Bencher) -> io::Result<()> {
-            bench!(b, FilterType::Box(15), simd2)
-        }
-
-        #[bench]
-        fn box17_simd2(b: &mut Bencher) -> io::Result<()> {
-            bench!(b, FilterType::Box(17), simd2)
-        }
-
-        #[bench]
-        fn box19_simd2(b: &mut Bencher) -> io::Result<()> {
-            bench!(b, FilterType::Box(19), simd2)
-        }
-
         #[test]
         fn simd3() -> io::Result<()> {
             check_all!(simd3)
-        }
-
-        #[bench]
-        fn box3_simd3(b: &mut Bencher) -> io::Result<()> {
-            bench!(b, FilterType::Box(3), simd3)
-        }
-
-        #[bench]
-        fn box5_simd3(b: &mut Bencher) -> io::Result<()> {
-            bench!(b, FilterType::Box(5), simd3)
-        }
-
-        #[bench]
-        fn box7_simd3(b: &mut Bencher) -> io::Result<()> {
-            bench!(b, FilterType::Box(7), simd3)
-        }
-
-        #[bench]
-        fn box9_simd3(b: &mut Bencher) -> io::Result<()> {
-            bench!(b, FilterType::Box(9), simd3)
-        }
-
-        #[bench]
-        fn box11_simd3(b: &mut Bencher) -> io::Result<()> {
-            bench!(b, FilterType::Box(11), simd3)
-        }
-
-        #[bench]
-        fn box13_simd3(b: &mut Bencher) -> io::Result<()> {
-            bench!(b, FilterType::Box(13), simd3)
-        }
-
-        #[bench]
-        fn box15_simd3(b: &mut Bencher) -> io::Result<()> {
-            bench!(b, FilterType::Box(15), simd3)
-        }
-
-        #[bench]
-        fn box17_simd3(b: &mut Bencher) -> io::Result<()> {
-            bench!(b, FilterType::Box(17), simd3)
-        }
-
-        #[bench]
-        fn box19_simd3(b: &mut Bencher) -> io::Result<()> {
-            bench!(b, FilterType::Box(19), simd3)
         }
     }
 }

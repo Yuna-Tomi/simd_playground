@@ -21,7 +21,7 @@ naive2 = []
 simd1 = []
 simd2 = []
 simd3 = []
-with open("raw", "r") as f:
+with open("bench.log", "r") as f:
     for line in f.readlines():
         tokens = line.split(' ')
         tokens = [s for s in tokens if len(s) > 0]
@@ -48,11 +48,13 @@ simd1.sort()
 simd2.sort()
 simd3.sort()
 
+y_upper = int(max(naive2[-1], simd1[-1], simd2[-1], simd3[-1])*1.05)
+
 plt_setup()
 fig = plt.figure(figsize=(12, 12))
 ax = fig.add_subplot(111)
 ax.set_xlim(2, 20)
-ax.set_ylim(0, 200000)
+ax.set_ylim(0, y_upper)
 ax.set_xlabel("Kernel Size", size=30)
 ax.set_ylabel("Average Execution Time (ms)", size=30)
 
